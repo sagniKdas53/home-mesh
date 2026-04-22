@@ -125,7 +125,7 @@ thonny
 ### 2. Pi 4 (LCD + Power Monitor)
 
 ```bash
-# Create venv and install dependencies
+# Install dependencies (RPLCD is pip-only, so use a venv)
 cd ~/Documents/docker-composes/home-mesh
 python3 -m venv venv
 venv/bin/pip install -r Pi4LCD/requirements.txt
@@ -148,10 +148,8 @@ sudo bash shared/setup_wol.sh
 ### 3. Pi 5 (Headless Monitor)
 
 ```bash
-# Create venv and install dependencies (skip if already created for Pi 4)
-cd ~/Documents/docker-composes/home-mesh
-python3 -m venv venv
-venv/bin/pip install -r Pi5/requirements.txt
+# Install dependencies (only needs requests, available via apt)
+sudo apt install -y python3-requests
 
 # Create config
 cp config.example.ini Pi5/config.ini

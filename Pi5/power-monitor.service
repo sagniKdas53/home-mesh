@@ -5,7 +5,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/pi5/Documents/docker-composes/home-mesh/venv/bin/python /home/pi5/Documents/docker-composes/home-mesh/Pi5/power_monitor.py
+ExecStart=/usr/bin/python3 /home/pi5/Documents/docker-composes/home-mesh/Pi5/power_monitor.py
 Restart=on-failure
 RestartSec=5
 User=root
