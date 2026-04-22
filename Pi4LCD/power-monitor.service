@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi 4 LCD Stats & Power Monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi4/Documents/docker-composes/PiLCD/power_monitor.py
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi 5 Headless Power Monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi5/Documents/docker-composes/power_monitor.py
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

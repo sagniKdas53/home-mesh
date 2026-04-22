@@ -1,0 +1,18 @@
+venv/
+__pycache__/
+legacy/
+
+# Secrets — never commit these
+config.ini
+config.json
+
+# Compiled binaries
+*.o
+Pi4LCD/lcd_stats
+Pi4LCD/lcd_stats.backup
+Pi4LCD/lcd_power_monitor
+Pi5/power_monitor_headless
+
+# Runtime logs
+*.log
+*.err

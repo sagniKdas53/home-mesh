@@ -1,0 +1,11 @@
+{
+    "wifi_ssid": "YOUR_SSID",
+    "wifi_password": "YOUR_PASSWORD",
+    "bot_token": "YOUR_BOT_TOKEN",
+    "chat_id": "YOUR_CHAT_ID",
+    "pi4_mac": "AA:BB:CC:DD:EE:F1",
+    "pi5_mac": "AA:BB:CC:DD:EE:F2",
+    "pi4_ip": "192.168.0.XXX",
+    "pi5_ip": "192.168.0.XXX",
+    "wol_boot_delay_sec": 180
+}

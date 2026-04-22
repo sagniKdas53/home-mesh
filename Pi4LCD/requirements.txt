@@ -1,0 +1,3 @@
+RPLCD
+RPi.GPIO
+requests
