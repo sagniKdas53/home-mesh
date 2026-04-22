@@ -89,6 +89,14 @@ print(f"  WOL_BOOT_DELAY: {WOL_BOOT_DELAY}s")
 
 boot_time = utime.time()
 wlan = network.WLAN(network.STA_IF)
+wdt = None  # Set after boot, used globally to feed watchdog during network ops
+
+
+def feed_watchdog():
+    """Feed the watchdog if it's been initialized."""
+    global wdt
+    if wdt is not None:
+        wdt.feed()
 
 # ---------------------------------------------------------------------------
 # WiFi
@@ -146,6 +154,7 @@ def send_telegram(text):
         print("[TG] WiFi down — skipping Telegram send")
         return False
     try:
+        feed_watchdog()
         url = f"{TELEGRAM_URL}/sendMessage"
         payload_dict = {"chat_id": CHAT_ID, "text": text}
         payload = ujson.dumps(payload_dict)
@@ -153,6 +162,7 @@ def send_telegram(text):
         print(f"[TG] Payload: chat_id='{CHAT_ID}', text='{text[:60]}...'" if len(text) > 60 else f"[TG] Payload: chat_id='{CHAT_ID}', text='{text}'")
         resp = urequests.post(url, data=payload,
                               headers={"Content-Type": "application/json"})
+        feed_watchdog()
         ok = resp.status_code == 200
         if not ok:
             # Read the response body to see what Telegram says
@@ -175,12 +185,14 @@ def get_updates(offset=None):
     if not wlan.isconnected():
         return []
     try:
-        params = {"timeout": 5}
+        feed_watchdog()
+        params = {"timeout": 2}  # Keep short to avoid watchdog timeout
         if offset is not None:
             params["offset"] = offset
         url = f"{TELEGRAM_URL}/getUpdates"
         resp = urequests.post(url, data=ujson.dumps(params),
                               headers={"Content-Type": "application/json"})
+        feed_watchdog()
         if resp.status_code == 200:
             data = resp.json()
             resp.close()
@@ -361,9 +373,10 @@ def main():
     print("[BOOT] Step 6: Flushing stale updates...")
     flush_updates()
 
-    # 7. Enable hardware watchdog (8 s timeout)
-    wdt = machine.WDT(timeout=8000)
-    print("[BOOT] Step 7: Watchdog enabled (8 s)")
+    # 7. Enable hardware watchdog (8.388 s timeout — max on RP2040)
+    global wdt
+    wdt = machine.WDT(timeout=8388)
+    print("[BOOT] Step 7: Watchdog enabled (8.388 s)")
 
     # 8. Main loop
     print("[BOOT] Step 8: Entering main loop — listening for Telegram commands...")
@@ -383,7 +396,9 @@ def main():
 
         # Poll Telegram
         try:
+            wdt.feed()
             updates = get_updates(offset=last_update_id)
+            wdt.feed()
             for update in updates:
                 uid = update.get("update_id")
                 last_update_id = uid + 1
@@ -395,7 +410,9 @@ def main():
 
                 if text and text.startswith("/"):
                     print(f"Command: {text} from chat {cid}")
+                    wdt.feed()
                     handle_command(text, cid)
+                    wdt.feed()
         except Exception as e:
             print(f"Polling error: {e}")
 
