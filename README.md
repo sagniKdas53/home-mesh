@@ -125,8 +125,10 @@ thonny
 ### 2. Pi 4 (LCD + Power Monitor)
 
 ```bash
-# Install dependencies
-pip install -r Pi4LCD/requirements.txt
+# Create venv and install dependencies
+cd ~/Documents/docker-composes/home-mesh
+python3 -m venv venv
+venv/bin/pip install -r Pi4LCD/requirements.txt
 
 # Create config
 cp config.example.ini Pi4LCD/config.ini
@@ -146,8 +148,10 @@ sudo bash shared/setup_wol.sh
 ### 3. Pi 5 (Headless Monitor)
 
 ```bash
-# Install dependencies
-pip install -r Pi5/requirements.txt
+# Create venv and install dependencies (skip if already created for Pi 4)
+cd ~/Documents/docker-composes/home-mesh
+python3 -m venv venv
+venv/bin/pip install -r Pi5/requirements.txt
 
 # Create config
 cp config.example.ini Pi5/config.ini
