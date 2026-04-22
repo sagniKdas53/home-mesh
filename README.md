@@ -104,12 +104,22 @@ graph LR
 ### 1. Pi Pico W
 
 ```bash
-# Copy config template and fill in your values
+# 1. Copy config template and fill in your values
 cp PiPico/config.example.json PiPico/config.json
 # Edit config.json with your WiFi, Telegram, and MAC addresses
 
-# Flash to Pico W using Thonny or mpremote:
-#   - Upload main.py, boot.py, and config.json to the Pico's filesystem
+# 2. Build a standalone main.py with secrets baked in
+python3 PiPico/build.py
+# This produces PiPico/main_built.py (gitignored)
+
+# 3. Flash to Pico W using Thonny (from the project venv)
+source venv/bin/activate
+thonny
+# In Thonny:
+#   - Set interpreter to MicroPython (Raspberry Pi Pico)
+#   - Upload PiPico/main_built.py to the Pico as "main.py"
+#   - Upload PiPico/boot.py to the Pico as "boot.py"
+#   - No need to upload config.json — values are baked into main_built.py
 ```
 
 ### 2. Pi 4 (LCD + Power Monitor)

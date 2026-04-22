@@ -72,8 +72,20 @@ CHAT_ID = str(config["chat_id"])
 PI4_MAC = config["pi4_mac"]
 PI5_MAC = config["pi5_mac"]
 WOL_BOOT_DELAY = config.get("wol_boot_delay_sec", 180)
+DEBUG_MODE = config.get("debug_mode", False)
+
+if DEBUG_MODE:
+    WOL_BOOT_DELAY = 10  # Reduced delay for debugging
+    print(f"[DEBUG] Debug mode ON — boot delay reduced to {WOL_BOOT_DELAY}s")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+print(f"[DEBUG] Config loaded:")
+print(f"  SSID: {WIFI_SSID}")
+print(f"  CHAT_ID: '{CHAT_ID}' (type={type(CHAT_ID)})")
+print(f"  BOT_TOKEN: {BOT_TOKEN[:10]}...{BOT_TOKEN[-5:]}")
+print(f"  TELEGRAM_URL: {TELEGRAM_URL[:40]}...")
+print(f"  WOL_BOOT_DELAY: {WOL_BOOT_DELAY}s")
 
 boot_time = utime.time()
 wlan = network.WLAN(network.STA_IF)
@@ -131,20 +143,30 @@ def sync_ntp():
 def send_telegram(text):
     """Send a message to the configured Telegram chat."""
     if not wlan.isconnected():
-        print("WiFi down — skipping Telegram send")
+        print("[TG] WiFi down — skipping Telegram send")
         return False
     try:
         url = f"{TELEGRAM_URL}/sendMessage"
-        payload = ujson.dumps({"chat_id": CHAT_ID, "text": text})
+        payload_dict = {"chat_id": CHAT_ID, "text": text}
+        payload = ujson.dumps(payload_dict)
+        print(f"[TG] Sending to {url}")
+        print(f"[TG] Payload: chat_id='{CHAT_ID}', text='{text[:60]}...'" if len(text) > 60 else f"[TG] Payload: chat_id='{CHAT_ID}', text='{text}'")
         resp = urequests.post(url, data=payload,
                               headers={"Content-Type": "application/json"})
         ok = resp.status_code == 200
         if not ok:
-            print(f"Telegram send error: {resp.status_code}")
+            # Read the response body to see what Telegram says
+            try:
+                body = resp.text
+            except:
+                body = "(could not read body)"
+            print(f"[TG] ERROR {resp.status_code}: {body}")
+        else:
+            print(f"[TG] Message sent OK")
         resp.close()
         return ok
     except Exception as e:
-        print(f"Telegram send failed: {e}")
+        print(f"[TG] Send EXCEPTION: {e}")
         return False
 
 
@@ -163,9 +185,15 @@ def get_updates(offset=None):
             data = resp.json()
             resp.close()
             return data.get("result", [])
+        else:
+            try:
+                body = resp.text
+            except:
+                body = "(could not read body)"
+            print(f"[TG] getUpdates ERROR {resp.status_code}: {body}")
         resp.close()
     except Exception as e:
-        print(f"getUpdates failed: {e}")
+        print(f"[TG] getUpdates EXCEPTION: {e}")
     return []
 
 
@@ -291,39 +319,55 @@ def handle_command(text, chat_id):
 def main():
     print("=" * 40)
     print("Pi Pico W — Home Mesh Monitor")
+    print(f"Boot time: {boot_time}")
+    print(f"Free RAM: {gc.mem_free()} bytes")
     print("=" * 40)
 
     # 1. Connect WiFi
+    print("[BOOT] Step 1: Connecting WiFi...")
     ensure_wifi()
+    print(f"[BOOT] WiFi OK — IP: {wlan.ifconfig()}")
 
     # 2. NTP sync
+    print("[BOOT] Step 2: NTP sync...")
     sync_ntp()
 
+    # 2.5 Send a simple boot-alive message (ASCII only, minimal)
+    print("[BOOT] Step 2.5: Sending boot-alive test message...")
+    alive_ok = send_telegram("Pico W booted. Debug mode active.")
+    print(f"[BOOT] Boot-alive message result: {alive_ok}")
+
     # 3. Stabilization delay — prevents WOL on brief power flickers
-    print(f"Stabilization delay: {WOL_BOOT_DELAY}s before sending WOL...")
+    print(f"[BOOT] Step 3: Stabilization delay: {WOL_BOOT_DELAY}s before sending WOL...")
     for i in range(WOL_BOOT_DELAY):
         if not wlan.isconnected():
             print("WiFi lost during stabilization — reconnecting")
             ensure_wifi()
+        if i % 30 == 0:
+            print(f"  ...stabilization {i}/{WOL_BOOT_DELAY}s")
         utime.sleep(1)
+    print("[BOOT] Stabilization complete.")
 
     # 4. Send WOL to both Pi's
-    print("Sending WOL to Pi 4 and Pi 5...")
+    print("[BOOT] Step 4: Sending WOL to Pi 4 and Pi 5...")
     send_wol(PI4_MAC)
     send_wol(PI5_MAC)
 
     # 5. Telegram: power restored
-    send_telegram("⚡ GRID POWER RESTORED: Pico W online. WOL sent to Pi 4 & Pi 5.")
+    print("[BOOT] Step 5: Sending power-restored Telegram message...")
+    send_telegram("GRID POWER RESTORED: Pico W online. WOL sent to Pi 4 and Pi 5.")
 
     # 6. Flush stale updates
+    print("[BOOT] Step 6: Flushing stale updates...")
     flush_updates()
 
     # 7. Enable hardware watchdog (8 s timeout)
     wdt = machine.WDT(timeout=8000)
-    print("Watchdog enabled (8 s)")
+    print("[BOOT] Step 7: Watchdog enabled (8 s)")
 
     # 8. Main loop
-    print("Entering main loop — listening for Telegram commands...")
+    print("[BOOT] Step 8: Entering main loop — listening for Telegram commands...")
+    print(f"[BOOT] Free RAM after boot: {gc.mem_free()} bytes")
     last_update_id = None
     loop_count = 0
 
