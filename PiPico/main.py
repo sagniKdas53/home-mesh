@@ -71,8 +71,6 @@ BOT_TOKEN = config["bot_token"]
 CHAT_ID = str(config["chat_id"])
 PI4_MAC = config["pi4_mac"]
 PI5_MAC = config["pi5_mac"]
-PI4_IP = config.get("pi4_ip", "")
-PI5_IP = config.get("pi5_ip", "")
 WOL_BOOT_DELAY = config.get("wol_boot_delay_sec", 180)
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"

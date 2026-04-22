@@ -4,55 +4,99 @@ A three-device power monitoring and management system for a Raspberry Pi homelab
 
 ## Architecture
 
-```
-┌─────────────────────┐
-│     Pi Pico W        │  ← Powered by UPS / wall power
-│  • Ping target       │  ← Pi's ping this to detect power loss
-│  • Telegram bot      │  ← /wol, /status, /uptime, /help
-│  • WOL sender        │  ← Wakes Pi's after power restore
-│  • WiFi resilient    │  ← Auto-reconnects on WiFi drop
-└─────────┬───────────┘
-          │ ping (ICMP)
-    ┌─────┴─────┐
-    │           │
-┌───▼───┐  ┌───▼───┐
-│ Pi 4  │  │ Pi 5  │   ← Both on Ethernet (WOL-capable)
-│ LCD   │  │Headless│
-│ Stats │  │Monitor │
-│ +Power│  │ +Power │
-│Monitor│  │Monitor │
-└───────┘  └───────┘
+```mermaid
+graph TD
+    subgraph PICO["Pi Pico W — Ping Target + Bot"]
+        P1["📡 Ping Target"]
+        P2["🤖 Telegram Bot"]
+        P3["⚡ WOL Sender"]
+        P4["📶 WiFi Auto-Reconnect"]
+    end
 
-Telegram commands:
-  /shutdown pi4|pi5|all  ← Handled by respective Pi monitor
-  /restart  pi4|pi5|all  ← Handled by respective Pi monitor
-  /ping     pi4|pi5      ← Handled by respective Pi monitor
-  /wol      pi4|pi5|all  ← Handled by Pico
-  /status                ← Pico status
-  /uptime                ← Pico uptime
-  /help                  ← Command list
+    subgraph PI4["Pi 4 — LCD + Power Monitor"]
+        L1["🖥️ LCD: Temp + Uptime"]
+        L2["🔍 Ping Monitor"]
+        L3["📨 Telegram Listener"]
+        L4["⏱️ Shutdown Countdown"]
+    end
+
+    subgraph PI5["Pi 5 — Headless Monitor"]
+        H1["📋 Syslog Monitor"]
+        H2["🔍 Ping Monitor"]
+        H3["📨 Telegram Listener"]
+        H4["⏱️ Shutdown Countdown"]
+    end
+
+    USER["👤 You on Telegram"]
+
+    PI4 -- "ping every 60s" --> PICO
+    PI5 -- "ping every 60s" --> PICO
+
+    USER -- "/wol /status /uptime" --> P2
+    USER -- "/shutdown /restart /ping pi4" --> L3
+    USER -- "/shutdown /restart /ping pi5" --> H3
+
+    P3 -- "WOL magic packet<br/>(on boot after 3 min)" --> PI4
+    P3 -- "WOL magic packet<br/>(on boot after 3 min)" --> PI5
 ```
 
 ## Power Failure Timeline
 
+```mermaid
+sequenceDiagram
+    participant Grid as ⚡ Grid Power
+    participant Pico as Pi Pico W
+    participant Pi4 as Pi 4 (LCD)
+    participant Pi5 as Pi 5 (Headless)
+    participant TG as Telegram
+
+    Note over Grid: Power goes out
+    Grid->>Pico: ❌ Power lost
+    
+    Note over Pi4,Pi5: Ping attempts every 60s
+    Pi4->>Pico: ping (fail — strike 1)
+    Pi5->>Pico: ping (fail — strike 1)
+    Pi4->>Pico: ping (fail — strike 2)
+    Pi5->>Pico: ping (fail — strike 2)
+    Pi4->>Pico: ping (fail — strike 3)
+    Pi5->>Pico: ping (fail — strike 3)
+    
+    Note over Pi4,Pi5: 3 strikes — power loss declared
+    Pi4->>TG: ⚠️ GRID POWER LOST (7 min countdown)
+    Pi5->>TG: ⚠️ GRID POWER LOST (7 min countdown)
+    Note over Pi4: LCD shows countdown
+
+    Note over Pi4,Pi5: 7 minutes later...
+    Pi4->>TG: 🚨 SHUTDOWN INITIATED
+    Pi4->>Pi4: sync → poweroff
+    Pi5->>TG: 🚨 SHUTDOWN INITIATED
+    Pi5->>Pi5: sync → poweroff
+
+    Note over Grid: Power restored
+    Grid->>Pico: ✅ Power on
+    Note over Pico: WiFi connect → 3 min wait
+    Pico->>Pi4: 📡 WOL magic packet
+    Pico->>Pi5: 📡 WOL magic packet
+    Pico->>TG: ⚡ POWER RESTORED
+    Note over Pi4,Pi5: Boot → resume monitoring
 ```
-t=0     Power goes out. Pico loses power.
-t=1m    Pi's first ping fails (ping interval = 60s)
-t=2m    Second ping fails (strike 2)
-t=3m    Third ping fails (strike 3) → POWER LOSS DECLARED
-        ├─ Pi 4: LCD shows countdown, Telegram alert sent
-        └─ Pi 5: Syslog + Telegram alert sent
-t=10m   Countdown expires (3m detection + 7m countdown)
-        ├─ Pi 4: sync → systemctl poweroff
-        └─ Pi 5: sync → systemctl poweroff
 
---- Power restored ---
+## Telegram Commands
 
-t=0     Pico boots, connects WiFi
-t=3m    Stabilization delay expires
-        ├─ Pico sends WOL to Pi 4 + Pi 5
-        └─ Telegram: "POWER RESTORED"
-t=4m    Pi's boot up, resume monitoring
+```mermaid
+graph LR
+    subgraph "Handled by Pico"
+        A["/status"] --> A1["WiFi, uptime, RAM"]
+        B["/uptime"] --> B1["Pico uptime"]
+        C["/wol pi4∣pi5∣all"] --> C1["WOL magic packet"]
+        D["/help"] --> D1["Command list"]
+    end
+
+    subgraph "Handled by Pi Monitors"
+        E["/shutdown pi4∣pi5∣all"] --> E1["sync + poweroff"]
+        F["/restart pi4∣pi5∣all"] --> F1["reboot"]
+        G["/ping pi4∣pi5"] --> G1["Alive + temp + uptime"]
+    end
 ```
 
 ## Setup
@@ -65,8 +109,7 @@ cp PiPico/config.example.json PiPico/config.json
 # Edit config.json with your WiFi, Telegram, and MAC addresses
 
 # Flash to Pico W using Thonny or mpremote:
-#   - Upload main.py and config.json to the Pico's filesystem
-#   - Upload boot.py to auto-start on power-on
+#   - Upload main.py, boot.py, and config.json to the Pico's filesystem
 ```
 
 ### 2. Pi 4 (LCD + Power Monitor)
@@ -151,8 +194,6 @@ name = pi4   # or pi5
     "chat_id": "YOUR_CHAT_ID",
     "pi4_mac": "AA:BB:CC:DD:EE:F1",
     "pi5_mac": "AA:BB:CC:DD:EE:F2",
-    "pi4_ip": "192.168.0.XXX",
-    "pi5_ip": "192.168.0.XXX",
     "wol_boot_delay_sec": 180
 }
 ```
@@ -182,11 +223,11 @@ home-mesh/
 │   └── config.ini              # Secrets (gitignored)
 ├── shared/
 │   └── setup_wol.sh            # WOL setup for Pi's
-└── legacy/                     # Archived C code and old scripts
+└── legacy/                     # Archived C code and old scripts (gitignored)
 ```
 
 ## Security Notes
 
 - **All secrets** (Telegram tokens, WiFi passwords, chat IDs) are in gitignored config files
 - **Telegram commands** are validated against `chat_id` — unauthorized users are ignored
-- **Old tokens** in the `legacy/` directory should be **rotated** since they were committed to git history
+- The `legacy/` directory is gitignored and won't be pushed
