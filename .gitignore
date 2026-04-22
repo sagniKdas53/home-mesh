@@ -5,6 +5,7 @@ legacy/
 # Secrets — never commit these
 config.ini
 config.json
+main_built.py
 
 # Compiled binaries
 *.o
