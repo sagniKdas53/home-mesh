@@ -281,7 +281,7 @@ def handle_command(text, chat_id):
     if text == "/status":
         rssi = wlan.status("rssi") if wlan.isconnected() else "N/A"
         mem_free = gc.mem_free()
-        msg = (f"🤖 Pico W Status\n"
+        msg = (f"[Pico W Status]\n"
                f"WiFi: {'Connected' if wlan.isconnected() else 'Disconnected'}\n"
                f"RSSI: {rssi} dBm\n"
                f"Uptime: {format_uptime()}\n"
@@ -289,31 +289,31 @@ def handle_command(text, chat_id):
         send_telegram(msg)
 
     elif text == "/uptime":
-        send_telegram(f"⏱ Pico uptime: {format_uptime()}")
+        send_telegram(f"Pico uptime: {format_uptime()}")
 
     elif text.startswith("/wol"):
         parts = text.split()
         target = parts[1] if len(parts) > 1 else ""
         if target == "pi4":
             send_wol(PI4_MAC)
-            send_telegram(f"📡 WOL sent to Pi 4 ({PI4_MAC})")
+            send_telegram(f"WOL sent to Pi 4 ({PI4_MAC})")
         elif target == "pi5":
             send_wol(PI5_MAC)
-            send_telegram(f"📡 WOL sent to Pi 5 ({PI5_MAC})")
+            send_telegram(f"WOL sent to Pi 5 ({PI5_MAC})")
         elif target == "all":
             send_wol(PI4_MAC)
             send_wol(PI5_MAC)
-            send_telegram("📡 WOL sent to Pi 4 and Pi 5")
+            send_telegram("WOL sent to Pi 4 and Pi 5")
         else:
             send_telegram("Usage: /wol pi4 | /wol pi5 | /wol all")
 
     elif text == "/help":
-        msg = ("📋 Available commands:\n\n"
+        msg = ("Available commands:\n\n"
                "Pico commands:\n"
-               "  /status — WiFi, uptime, memory\n"
-               "  /uptime — Pico uptime\n"
-               "  /wol pi4|pi5|all — Wake-on-LAN\n"
-               "  /help — This message\n\n"
+               "  /status - WiFi, uptime, memory\n"
+               "  /uptime - Pico uptime\n"
+               "  /wol pi4|pi5|all - Wake-on-LAN\n"
+               "  /help - This message\n\n"
                "Pi commands (handled by Pi monitors):\n"
                "  /shutdown pi4|pi5|all\n"
                "  /restart pi4|pi5|all\n"
@@ -349,39 +349,63 @@ def main():
     alive_ok = send_telegram("Pico W booted. Debug mode active.")
     print(f"[BOOT] Boot-alive message result: {alive_ok}")
 
-    # 3. Stabilization delay — prevents WOL on brief power flickers
-    print(f"[BOOT] Step 3: Stabilization delay: {WOL_BOOT_DELAY}s before sending WOL...")
-    for i in range(WOL_BOOT_DELAY):
+    # 3. Flush stale updates from before this boot
+    print("[BOOT] Step 3: Flushing stale Telegram updates...")
+    flush_updates()
+
+    # 4. Stabilization delay — prevents WOL on brief power flickers
+    #    While waiting, actively poll and respond to Telegram commands
+    print(f"[BOOT] Step 4: Stabilization delay: {WOL_BOOT_DELAY}s (listening for commands)...")
+    last_update_id = None
+    stab_start = utime.time()
+    while (utime.time() - stab_start) < WOL_BOOT_DELAY:
+        elapsed = utime.time() - stab_start
+        if int(elapsed) % 30 == 0 and int(elapsed) == elapsed:
+            print(f"  ...stabilization {int(elapsed)}/{WOL_BOOT_DELAY}s")
+
         if not wlan.isconnected():
             print("WiFi lost during stabilization — reconnecting")
             ensure_wifi()
-        if i % 30 == 0:
-            print(f"  ...stabilization {i}/{WOL_BOOT_DELAY}s")
-        utime.sleep(1)
+            continue
+
+        # Poll and handle commands while waiting
+        try:
+            updates = get_updates(offset=last_update_id)
+            for update in updates:
+                uid = update.get("update_id")
+                last_update_id = uid + 1
+
+                msg = update.get("message", {})
+                text = msg.get("text", "")
+                chat = msg.get("chat", {})
+                cid = chat.get("id", "")
+
+                if text and text.startswith("/"):
+                    print(f"[STAB] Command during stabilization: {text} from chat {cid}")
+                    handle_command(text, cid)
+        except Exception as e:
+            print(f"[STAB] Polling error: {e}")
+
+        utime.sleep(2)
     print("[BOOT] Stabilization complete.")
 
-    # 4. Send WOL to both Pi's
-    print("[BOOT] Step 4: Sending WOL to Pi 4 and Pi 5...")
+    # 5. Send WOL to both Pi's
+    print("[BOOT] Step 5: Sending WOL to Pi 4 and Pi 5...")
     send_wol(PI4_MAC)
     send_wol(PI5_MAC)
 
-    # 5. Telegram: power restored
-    print("[BOOT] Step 5: Sending power-restored Telegram message...")
+    # 6. Telegram: power restored
+    print("[BOOT] Step 6: Sending power-restored Telegram message...")
     send_telegram("GRID POWER RESTORED: Pico W online. WOL sent to Pi 4 and Pi 5.")
-
-    # 6. Flush stale updates
-    print("[BOOT] Step 6: Flushing stale updates...")
-    flush_updates()
 
     # 7. Enable hardware watchdog (8.388 s timeout — max on RP2040)
     global wdt
     wdt = machine.WDT(timeout=8388)
     print("[BOOT] Step 7: Watchdog enabled (8.388 s)")
 
-    # 8. Main loop
+    # 8. Main loop (last_update_id carried from stabilization phase)
     print("[BOOT] Step 8: Entering main loop — listening for Telegram commands...")
     print(f"[BOOT] Free RAM after boot: {gc.mem_free()} bytes")
-    last_update_id = None
     loop_count = 0
 
     while True:
