@@ -93,9 +93,10 @@ graph LR
     end
 
     subgraph "Handled by Pi Monitors"
-        E["/shutdown pi4∣pi5∣all"] --> E1["sync + poweroff"]
-        F["/restart pi4∣pi5∣all"] --> F1["reboot"]
-        G["/ping pi4∣pi5"] --> G1["Alive + temp + uptime"]
+        E["/shutdown pi4|pi5|all"] --> E1["sync + poweroff"]
+        F["/restart pi4|pi5|all"] --> F1["reboot"]
+        G["/ping pi4|pi5"] --> G1["Alive + temp + uptime + last Pico ping"]
+        H["/status pi4|pi5"] --> H1["Same as /ping"]
     end
 ```
 

@@ -16,7 +16,8 @@ Telegram commands this device handles:
   /shutdown all   — shutdown this Pi
   /restart pi5    — reboot this Pi
   /restart all    — reboot this Pi
-  /ping pi5       — reply alive + uptime
+  /ping pi5       — reply alive + uptime + last Pico ping
+  /status pi5     — same as /ping
 """
 
 import configparser
@@ -118,6 +119,20 @@ def get_uptime_string():
     return " ".join(parts)
 
 
+def format_ago(ts):
+    """Format a timestamp as a human-readable 'X ago' string."""
+    if ts is None:
+        return "Never"
+    delta = int(time.time() - ts)
+    if delta < 60:
+        return f"{delta}s ago"
+    if delta < 3600:
+        return f"{delta // 60}m {delta % 60}s ago"
+    hours = delta // 3600
+    mins = (delta % 3600) // 60
+    return f"{hours}h {mins}m ago"
+
+
 # ---------------------------------------------------------------------------
 # Ping
 # ---------------------------------------------------------------------------
@@ -168,6 +183,7 @@ def get_updates(offset=None):
 # Telegram command listener (background thread)
 # ---------------------------------------------------------------------------
 _shutting_down = False
+_last_successful_ping = None
 
 
 def telegram_listener():
@@ -219,13 +235,15 @@ def telegram_listener():
                     send_telegram(f"🔄 {DEVICE_NAME}: Restart command received. Rebooting...")
                     subprocess.run(["systemctl", "reboot"], check=False)
 
-                elif text.startswith("/ping"):
+                elif text.startswith("/ping") or text.startswith("/status"):
                     temp = get_cpu_temp()
                     uptime = get_uptime_string()
+                    last_ping = format_ago(_last_successful_ping)
                     send_telegram(
                         f"🏓 {DEVICE_NAME} is alive!\n"
                         f"CPU Temp: {temp}°C\n"
-                        f"Uptime: {uptime}"
+                        f"Uptime: {uptime}\n"
+                        f"Last Pico ping: {last_ping}"
                     )
 
         except Exception as e:
@@ -238,12 +256,20 @@ def telegram_listener():
 # Main loop
 # ---------------------------------------------------------------------------
 def main():
+    global _last_successful_ping
+
     logger.info("Headless Power Monitor started (device: %s). Watching %s",
                 DEVICE_NAME, PICO_IP)
 
     # Start Telegram listener thread
     t = threading.Thread(target=telegram_listener, daemon=True)
     t.start()
+
+    # Announce startup
+    send_telegram(
+        f"🟢 {DEVICE_NAME} power monitor is online.\n"
+        f"Watching Pico at {PICO_IP}"
+    )
 
     last_ping_time = 0
     failed_ping_count = 0
@@ -260,6 +286,7 @@ def main():
         # --- Ping check ---
         if now - last_ping_time >= PING_INTERVAL:
             if ping_pico():
+                _last_successful_ping = time.time()
                 failed_ping_count = 0
                 if is_power_lost:
                     is_power_lost = False
