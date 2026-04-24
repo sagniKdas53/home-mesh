@@ -1,0 +1,10 @@
+services:
+  pi4-lcd-display:
+    build: .
+    container_name: pi4-lcd-display
+    privileged: true
+    restart: unless-stopped
+    environment:
+      - DISPLAY_UPDATE_INTERVAL_SEC=1.0
+    volumes:
+      - /sys/class/thermal:/sys/class/thermal:ro

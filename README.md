@@ -124,17 +124,8 @@ sudo systemctl start power-monitor.service
 The LCD requires the `RPLCD` library, which we run in Docker to avoid system Python environment conflicts (`PEP 668`).
 
 ```bash
-# Build the docker image
-docker build -t pi4-lcd-display .
-
-# Run the container in the background
-docker run -d \
-  --name pi4-lcd-display \
-  --privileged \
-  --restart unless-stopped \
-  -e DISPLAY_UPDATE_INTERVAL_SEC=1.0 \
-  -v /sys/class/thermal:/sys/class/thermal:ro \
-  pi4-lcd-display
+# Build and run the container in the background
+docker compose up -d --build
 ```
 
 ### 3. Pi 5 (Headless Monitor)
@@ -199,6 +190,7 @@ home-mesh/
 │   ├── power_monitor.py        # Native power monitor (same as Pi5)
 │   ├── lcd_display.py          # Dockerized LCD stats display
 │   ├── Dockerfile              # Docker environment for LCD
+│   ├── docker-compose.yml      # Compose file for easy deployment
 │   ├── lcd_message.py          # One-shot LCD message utility
 │   ├── power-monitor.service   # Native systemd unit
 │   ├── requirements.txt
