@@ -30,7 +30,7 @@ def main():
         config = json.load(f)
 
     # Validate required fields
-    required = ["wifi_ssid", "wifi_password", "bot_token", "chat_id", "pi4_mac", "pi5_mac"]
+    required = ["wifi_ssid", "wifi_password", "bot_token", "chat_id"]
     missing = [k for k in required if k not in config or str(config[k]).startswith("YOUR_")]
     if missing:
         print(f"ERROR: These config fields are missing or still have placeholder values:")
@@ -53,9 +53,6 @@ config = {{
     "wifi_password": {json.dumps(config["wifi_password"])},
     "bot_token": {json.dumps(config["bot_token"])},
     "chat_id": {json.dumps(str(config["chat_id"]))},
-    "pi4_mac": {json.dumps(config["pi4_mac"])},
-    "pi5_mac": {json.dumps(config["pi5_mac"])},
-    "wol_boot_delay_sec": {json.dumps(config.get("wol_boot_delay_sec", 180))},
 }}
 '''
 
@@ -97,9 +94,6 @@ config = {{
     print(f"✅ Built: {OUTPUT_PATH}")
     print(f"   Upload this file to the Pico as 'main.py'")
     print(f"   WiFi SSID: {config['wifi_ssid']}")
-    print(f"   Pi4 MAC:   {config['pi4_mac']}")
-    print(f"   Pi5 MAC:   {config['pi5_mac']}")
-    print(f"   WOL delay: {config.get('wol_boot_delay_sec', 180)}s")
 
 
 if __name__ == "__main__":
