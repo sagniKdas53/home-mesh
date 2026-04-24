@@ -24,12 +24,12 @@ import time
 # ---------------------------------------------------------------------------
 # Logging — syslog + console
 # ---------------------------------------------------------------------------
-logger = logging.getLogger("Pi5_PowerMonitor")
+logger = logging.getLogger("PowerMonitor")
 logger.setLevel(logging.INFO)
 
 syslog_handler = logging.handlers.SysLogHandler(address="/dev/log")
 syslog_handler.setFormatter(
-    logging.Formatter("Pi5_PowerMonitor[%(process)d]: %(message)s")
+    logging.Formatter("PowerMonitor[%(process)d]: %(message)s")
 )
 logger.addHandler(syslog_handler)
 
@@ -134,7 +134,7 @@ def ping_pico():
 def main():
     global _last_successful_ping
 
-    logger.info("Headless Power Monitor started (device: %s). Watching %s",
+    logger.info("Native Power Monitor started (device: %s). Watching %s",
                 DEVICE_NAME, PICO_IP)
 
     last_ping_time = 0

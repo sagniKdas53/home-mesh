@@ -12,10 +12,10 @@ graph TD
         P4["📶 WiFi Auto-Reconnect"]
     end
 
-    subgraph PI4["Pi 4 — LCD + Power Monitor"]
-        L1["🖥️ LCD: Temp + Uptime"]
-        L2["🔍 Ping Monitor"]
-        L4["⏱️ Shutdown Countdown"]
+    subgraph PI4["Pi 4 — Dual Service"]
+        L1["🖥️ LCD Display (Docker)"]
+        L2["🔍 Ping Monitor (Native)"]
+        L4["⏱️ Shutdown Countdown (Native)"]
     end
 
     subgraph PI5["Pi 5 — Headless Monitor"]
@@ -101,26 +101,40 @@ python3 PiPico/build.py
 #   - No need to upload config.json — values are baked into main_built.py
 ```
 
-### 2. Pi 4 (LCD + Power Monitor)
+### 2. Pi 4 (Dual Service: Power Monitor + LCD)
 
+Because safely shutting down the host system from within a Docker container is insecure and hacky, the Pi 4 uses a clean separation of concerns:
+
+#### Part A: Power Monitor (Native Systemd)
 ```bash
-# We use Docker so no venv is required on the host system.
 cd ~/Projects/home-mesh/Pi4LCD
 
 # Create config
 cp ../config.example.ini config.ini
 # Edit config.ini — set identity.name = pi4
 
+# Install systemd service
+sudo cp power-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable power-monitor.service
+sudo systemctl start power-monitor.service
+```
+
+#### Part B: LCD Display (Dockerized)
+The LCD requires the `RPLCD` library, which we run in Docker to avoid system Python environment conflicts (`PEP 668`).
+
+```bash
 # Build the docker image
-docker build -t pi4-power-monitor .
+docker build -t pi4-lcd-display .
 
 # Run the container in the background
 docker run -d \
-  --name pi4-power-monitor \
+  --name pi4-lcd-display \
   --privileged \
   --restart unless-stopped \
+  -e DISPLAY_UPDATE_INTERVAL_SEC=1.0 \
   -v /sys/class/thermal:/sys/class/thermal:ro \
-  pi4-power-monitor
+  pi4-lcd-display
 ```
 
 ### 3. Pi 5 (Headless Monitor)
@@ -182,10 +196,11 @@ home-mesh/
 │   ├── build.py                # script to compile secrets into main.py
 │   └── config.json             # Secrets (gitignored)
 ├── Pi4LCD/
-│   ├── power_monitor.py        # LCD stats + power monitor
-│   ├── Dockerfile              # Dockerized Python environment 
+│   ├── power_monitor.py        # Native power monitor (same as Pi5)
+│   ├── lcd_display.py          # Dockerized LCD stats display
+│   ├── Dockerfile              # Docker environment for LCD
 │   ├── lcd_message.py          # One-shot LCD message utility
-│   ├── power-monitor.service   # Legacy systemd unit
+│   ├── power-monitor.service   # Native systemd unit
 │   ├── requirements.txt
 │   └── config.ini              # Secrets (gitignored)
 ├── Pi5/
