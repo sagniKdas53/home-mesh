@@ -152,19 +152,28 @@ def ping_pico():
 # Telegram
 # ---------------------------------------------------------------------------
 def send_telegram(text):
+    """Send a Telegram message. Returns message_id on success, None on failure."""
     try:
-        requests.post(
+        resp = requests.post(
             f"{TELEGRAM_URL}/sendMessage",
             json={"chat_id": CHAT_ID, "text": text},
             timeout=10,
         )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("ok"):
+                return data.get("result", {}).get("message_id")
     except Exception as e:
         logger.warning("Telegram send failed: %s", e)
+    return None
 
 
 def get_updates(offset=None):
     try:
-        params = {"timeout": 5}
+        params = {
+            "timeout": 5,
+            "allowed_updates": ["message", "message_reaction"],
+        }
         if offset is not None:
             params["offset"] = offset
         resp = requests.post(
@@ -185,6 +194,45 @@ def get_updates(offset=None):
 _shutting_down = False
 _last_successful_ping = None
 
+# Pending reaction-based confirmations: {message_id: {"action": str, "ts": float}}
+_pending_confirm = {}
+_CONFIRM_TIMEOUT = 120  # seconds
+
+
+def _execute_shutdown():
+    global _shutting_down
+    if _shutting_down:
+        send_telegram(f"⚠️ {DEVICE_NAME}: Already shutting down.")
+        return
+    _shutting_down = True
+    logger.warning("Shutdown command received via Telegram")
+    send_telegram(f"🔌 {DEVICE_NAME}: Shutdown confirmed. Executing...")
+    subprocess.run(["sync"], check=False)
+    subprocess.run(["systemctl", "poweroff"], check=False)
+
+
+def _execute_restart():
+    global _shutting_down
+    if _shutting_down:
+        send_telegram(f"⚠️ {DEVICE_NAME}: Already shutting down.")
+        return
+    _shutting_down = True
+    logger.warning("Restart command received via Telegram")
+    send_telegram(f"🔄 {DEVICE_NAME}: Restart confirmed. Rebooting...")
+    subprocess.run(["systemctl", "reboot"], check=False)
+
+
+def _send_ping_response():
+    temp = get_cpu_temp()
+    uptime = get_uptime_string()
+    last_ping = format_ago(_last_successful_ping)
+    send_telegram(
+        f"🏓 {DEVICE_NAME} is alive!\n"
+        f"CPU Temp: {temp}°C\n"
+        f"Uptime: {uptime}\n"
+        f"Last Pico ping: {last_ping}"
+    )
+
 
 def telegram_listener():
     global _shutting_down
@@ -197,54 +245,76 @@ def telegram_listener():
 
     while True:
         try:
+            # Expire old confirmations
+            now = time.time()
+            expired = [mid for mid, e in _pending_confirm.items()
+                       if now - e["ts"] > _CONFIRM_TIMEOUT]
+            for mid in expired:
+                del _pending_confirm[mid]
+
             updates = get_updates(offset=last_update_id)
             for update in updates:
                 uid = update.get("update_id")
                 last_update_id = uid + 1
 
+                # --- Handle reactions on confirmation messages ---
+                reaction = update.get("message_reaction")
+                if reaction:
+                    msg_id = reaction.get("message_id")
+                    chat = reaction.get("chat", {})
+                    cid = str(chat.get("id", ""))
+                    if cid == CHAT_ID and msg_id in _pending_confirm:
+                        entry = _pending_confirm.pop(msg_id)
+                        if time.time() - entry["ts"] <= _CONFIRM_TIMEOUT:
+                            if entry["action"] == "shutdown":
+                                _execute_shutdown()
+                            elif entry["action"] == "restart":
+                                _execute_restart()
+                    continue
+
+                # --- Handle text commands ---
                 msg = update.get("message", {})
                 text = (msg.get("text") or "").strip().lower()
                 chat = msg.get("chat", {})
                 cid = str(chat.get("id", ""))
 
-                if cid != CHAT_ID:
+                if cid != CHAT_ID or not text.startswith("/"):
                     continue
 
-                if not text.startswith("/"):
-                    continue
+                parts = text.split()
+                cmd = parts[0]
+                target = parts[1] if len(parts) > 1 else None
 
-                if DEVICE_NAME not in text and "all" not in text:
-                    continue
+                # --- /shutdown and /restart ---
+                if cmd in ("/shutdown", "/restart"):
+                    action = "shutdown" if cmd == "/shutdown" else "restart"
 
-                if text.startswith("/shutdown"):
-                    if _shutting_down:
-                        send_telegram(f"⚠️ {DEVICE_NAME}: Already shutting down.")
-                        continue
-                    _shutting_down = True
-                    logger.warning("Shutdown command received via Telegram")
-                    send_telegram(f"🔌 {DEVICE_NAME}: Shutdown command received. Executing...")
-                    subprocess.run(["sync"], check=False)
-                    subprocess.run(["systemctl", "poweroff"], check=False)
+                    if target == DEVICE_NAME or target == "all":
+                        # Explicit target — execute immediately
+                        if action == "shutdown":
+                            _execute_shutdown()
+                        else:
+                            _execute_restart()
 
-                elif text.startswith("/restart"):
-                    if _shutting_down:
-                        send_telegram(f"⚠️ {DEVICE_NAME}: Already shutting down.")
-                        continue
-                    _shutting_down = True
-                    logger.warning("Restart command received via Telegram")
-                    send_telegram(f"🔄 {DEVICE_NAME}: Restart command received. Rebooting...")
-                    subprocess.run(["systemctl", "reboot"], check=False)
+                    elif target is None:
+                        # No target — prompt for confirmation via reaction
+                        emoji = "🔌" if action == "shutdown" else "🔄"
+                        mid = send_telegram(
+                            f"{emoji} {DEVICE_NAME}: React to this message "
+                            f"to confirm {action}.\n"
+                            f"Usage: /{action} pi4|pi5|all\n"
+                            f"Expires in {_CONFIRM_TIMEOUT}s."
+                        )
+                        if mid:
+                            _pending_confirm[mid] = {
+                                "action": action, "ts": time.time(),
+                            }
+                    # else: target is another device, ignore
 
-                elif text.startswith("/ping") or text.startswith("/status"):
-                    temp = get_cpu_temp()
-                    uptime = get_uptime_string()
-                    last_ping = format_ago(_last_successful_ping)
-                    send_telegram(
-                        f"🏓 {DEVICE_NAME} is alive!\n"
-                        f"CPU Temp: {temp}°C\n"
-                        f"Uptime: {uptime}\n"
-                        f"Last Pico ping: {last_ping}"
-                    )
+                # --- /ping and /status ---
+                elif cmd in ("/ping", "/status"):
+                    if target is None or target in (DEVICE_NAME, "all"):
+                        _send_ping_response()
 
         except Exception as e:
             logger.warning("Telegram listener error: %s", e)

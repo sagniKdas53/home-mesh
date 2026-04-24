@@ -33,7 +33,7 @@ sudo ethtool -s "$IFACE" wol g
 # Show current state
 echo ""
 echo "Current Wake-on settings:"
-ethtool "$IFACE" | grep -i "wake-on"
+sudo ethtool "$IFACE" | grep -i "wake-on"
 echo ""
 
 # Create a persistent systemd service so WOL survives reboots
