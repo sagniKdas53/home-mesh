@@ -1,23 +1,19 @@
 """
-Pi Pico W — Telegram Bot + WOL Sender + Ping Target
+Pi Pico W — Telegram Bot + Ping Target
 
 Boot sequence:
   1. Load config.json
   2. Connect WiFi (retry forever)
   3. Sync NTP time
-  4. Wait stabilization delay (default 3 min) to avoid power-flicker WOL
-  5. Send WOL to Pi 4 + Pi 5
-  6. Notify Telegram: POWER RESTORED
-  7. Flush stale Telegram updates
-  8. Enable hardware watchdog
-  9. Main loop: poll Telegram commands
+  4. Notify Telegram: POWER RESTORED
+  5. Flush stale Telegram updates
+  6. Enable hardware watchdog
+  7. Main loop: poll Telegram commands
 
 Telegram commands handled by Pico:
   /status   — WiFi RSSI, uptime, free memory
   /uptime   — Pico uptime
-  /wol pi4  — WOL magic packet to Pi 4
-  /wol pi5  — WOL magic packet to Pi 5
-  /wol all  — WOL both
+  /simulate_power_loss — Disconnect WiFi for 11 minutes to test Pi shutdown
   /help     — List all commands
 """
 
@@ -69,18 +65,13 @@ WIFI_SSID = config["wifi_ssid"]
 WIFI_PASSWORD = config["wifi_password"]
 BOT_TOKEN = config["bot_token"]
 CHAT_ID = str(config["chat_id"])
-PI4_MAC = config["pi4_mac"]
-PI5_MAC = config["pi5_mac"]
-WOL_BOOT_DELAY = config.get("wol_boot_delay_sec", 180)
+PI4_MAC = config.get("pi4_mac", "")
+PI5_MAC = config.get("pi5_mac", "")
 DEBUG_MODE = config.get("debug_mode", False)
-
-if DEBUG_MODE:
-    WOL_BOOT_DELAY = 10  # Reduced delay for debugging
-    print(f"[DEBUG] Debug mode ON — boot delay reduced to {WOL_BOOT_DELAY}s")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-boot_time = utime.time()
+boot_time_ms = utime.ticks_ms()
 wlan = network.WLAN(network.STA_IF)
 wdt = None  # Set after boot, used globally to feed watchdog during network ops
 
@@ -103,7 +94,7 @@ dprint(f"  SSID: {WIFI_SSID}")
 dprint(f"  CHAT_ID: '{CHAT_ID}' (type={type(CHAT_ID)})")
 dprint(f"  BOT_TOKEN: {BOT_TOKEN[:10]}...{BOT_TOKEN[-5:]}")
 dprint(f"  TELEGRAM_URL: {TELEGRAM_URL[:40]}...")
-dprint(f"  WOL_BOOT_DELAY: {WOL_BOOT_DELAY}s")
+dprint(f"  TELEGRAM_URL: {TELEGRAM_URL[:40]}...")
 
 # ---------------------------------------------------------------------------
 # WiFi
@@ -227,36 +218,15 @@ def flush_updates():
         print("  No stale updates")
 
 
-# ---------------------------------------------------------------------------
-# WOL
-# ---------------------------------------------------------------------------
-def _mac_to_bytes(mac_str):
-    """Convert 'AA:BB:CC:DD:EE:FF' to bytes."""
-    return bytes(int(b, 16) for b in mac_str.split(":"))
+# Removed WOL
 
-
-def send_wol(mac_str):
-    """Send a Wake-on-LAN magic packet (3 times for reliability)."""
-    mac_bytes = _mac_to_bytes(mac_str)
-    magic = b"\xff" * 6 + mac_bytes * 16
-    for i in range(3):
-        try:
-            sock = usocket.socket(usocket.AF_INET, usocket.SOCK_DGRAM)
-            sock.setsockopt(usocket.SOL_SOCKET, usocket.SO_BROADCAST, 1)
-            sock.sendto(magic, ("255.255.255.255", 9))
-            sock.close()
-        except Exception as e:
-            print(f"WOL send #{i+1} failed: {e}")
-        if i < 2:
-            utime.sleep(1)
-    print(f"WOL sent to {mac_str}")
 
 
 # ---------------------------------------------------------------------------
 # Uptime formatting
 # ---------------------------------------------------------------------------
 def format_uptime():
-    secs = utime.time() - boot_time
+    secs = utime.ticks_diff(utime.ticks_ms(), boot_time_ms) // 1000
     d = secs // 86400
     h = (secs % 86400) // 3600
     m = (secs % 3600) // 60
@@ -296,28 +266,25 @@ def handle_command(text, chat_id):
     elif text == "/uptime":
         send_telegram(f"Pico uptime: {format_uptime()}")
 
-    elif text.startswith("/wol"):
-        parts = text.split()
-        target = parts[1] if len(parts) > 1 else ""
-        if target == "pi4":
-            send_wol(PI4_MAC)
-            send_telegram(f"WOL sent to Pi 4 ({PI4_MAC})")
-        elif target == "pi5":
-            send_wol(PI5_MAC)
-            send_telegram(f"WOL sent to Pi 5 ({PI5_MAC})")
-        elif target == "all":
-            send_wol(PI4_MAC)
-            send_wol(PI5_MAC)
-            send_telegram("WOL sent to Pi 4 and Pi 5")
-        else:
-            send_telegram("Usage: /wol pi4 | /wol pi5 | /wol all")
+    elif text == "/simulate_power_loss":
+        send_telegram("Simulating power loss... Disconnecting WiFi for 11 minutes to trigger Pi shutdown. Pico will be unreachable.")
+        wlan.disconnect()
+        wlan.active(False)
+        # Need to feed watchdog while waiting
+        for _ in range(11 * 60):
+            feed_watchdog()
+            utime.sleep(1)
+        wlan.active(True)
+        ensure_wifi()
+        sync_ntp()
+        send_telegram("Power loss simulation complete. Pico reconnected to WiFi.")
 
     elif text == "/help":
         msg = ("Available commands:\n\n"
                "Pico commands:\n"
                "  /status - WiFi, uptime, memory\n"
                "  /uptime - Pico uptime\n"
-               "  /wol pi4|pi5|all - Wake-on-LAN\n"
+               "  /simulate_power_loss - Disable WiFi for 11m to test Pi shutdown\n"
                "  /help - This message\n\n"
                "Pi commands (handled by Pi monitors):\n"
                "  /shutdown pi4|pi5|all\n"
@@ -356,59 +323,19 @@ def main():
     # 3. Flush stale updates from before this boot
     flush_updates()
 
-    # 4. Stabilization delay — prevents WOL on brief power flickers
-    #    While waiting, actively poll and respond to Telegram commands
-    print(f"Stabilization: {WOL_BOOT_DELAY}s (listening for commands)...")
-    last_update_id = None
-    stab_start = utime.time()
-    while (utime.time() - stab_start) < WOL_BOOT_DELAY:
-        elapsed = utime.time() - stab_start
-        if int(elapsed) % 30 == 0 and int(elapsed) == elapsed:
-            dprint(f"  ...stabilization {int(elapsed)}/{WOL_BOOT_DELAY}s")
+    # 4. Telegram: power restored
+    send_telegram("GRID POWER RESTORED: Pico W online.")
 
-        if not wlan.isconnected():
-            print("WiFi lost during stabilization — reconnecting")
-            ensure_wifi()
-            continue
-
-        # Poll and handle commands while waiting
-        try:
-            updates = get_updates(offset=last_update_id)
-            for update in updates:
-                uid = update.get("update_id")
-                last_update_id = uid + 1
-
-                msg = update.get("message", {})
-                text = msg.get("text", "")
-                chat = msg.get("chat", {})
-                cid = chat.get("id", "")
-
-                if text and text.startswith("/"):
-                    dprint(f"Command during stabilization: {text}")
-                    handle_command(text, cid)
-        except Exception as e:
-            print(f"Polling error: {e}")
-
-        utime.sleep(2)
-    print("Stabilization complete.")
-
-    # 5. Send WOL to both Pi's
-    print("Sending WOL to Pi 4 and Pi 5...")
-    send_wol(PI4_MAC)
-    send_wol(PI5_MAC)
-
-    # 6. Telegram: power restored
-    send_telegram("GRID POWER RESTORED: Pico W online. WOL sent to Pi 4 and Pi 5.")
-
-    # 7. Enable hardware watchdog (8.388 s timeout — max on RP2040)
+    # 5. Enable hardware watchdog (8.388 s timeout — max on RP2040)
     global wdt
     wdt = machine.WDT(timeout=8388)
     print("Watchdog enabled (8.388 s)")
 
-    # 8. Main loop (last_update_id carried from stabilization phase)
+    # 6. Main loop
     print("Entering main loop...")
     dprint(f"Free RAM after boot: {gc.mem_free()} bytes")
     loop_count = 0
+    last_update_id = None
 
     while True:
         wdt.feed()
