@@ -5,6 +5,6 @@ services:
     privileged: true
     restart: unless-stopped
     environment:
-      - DISPLAY_UPDATE_INTERVAL_SEC=1.0
+      - DISPLAY_UPDATE_INTERVAL_SEC=10.0
     volumes:
       - /sys/class/thermal:/sys/class/thermal:ro
