@@ -1,35 +1,34 @@
 # Home-Mesh — UPS-Aware Power Monitoring System
 
-A three-device power monitoring and management system for a Raspberry Pi homelab, designed to gracefully shut down NVMe-equipped Pi's during extended power outages and trigger shutdowns cleanly via ping tracking.
+A three-device power monitoring system for a Raspberry Pi homelab: the Pico W
+reports its own status over HTTP, the Pi 4 and Pi 5 poll it and gracefully
+shut themselves down during extended power outages.
+
+Wake-on-LAN / power-on automation was tried and abandoned (see
+`Pi4LCD/GiveUp.md`) — the Pi 4's Ethernet chip loses power on halt, so it
+can't receive a magic packet. Nothing here attempts power-on; only the
+power-off side is implemented.
 
 ## Architecture
 
 ```mermaid
 graph TD
-    subgraph PICO["Pi Pico W — Ping Target + Bot"]
-        P1["📡 Ping Target"]
-        P2["🤖 Telegram Bot"]
-        P4["📶 WiFi Auto-Reconnect"]
+    subgraph PICO["Pi Pico W"]
+        P1["📡 /status HTTP endpoint"]
+        P4["📶 WiFi auto-reconnect"]
     end
 
     subgraph PI4["Pi 4 — Dual Service"]
         L1["🖥️ LCD Display (Docker)"]
-        L2["🔍 Ping Monitor (Native)"]
-        L4["⏱️ Shutdown Countdown (Native)"]
+        L2["🔍 Power Monitor (Native)"]
     end
 
     subgraph PI5["Pi 5 — Headless Monitor"]
-        H1["📋 Syslog Monitor"]
-        H2["🔍 Ping Monitor"]
-        H4["⏱️ Shutdown Countdown"]
+        H2["🔍 Power Monitor"]
     end
 
-    USER["👤 You on Telegram"]
-
-    PI4 -- "ping every 60s" --> PICO
-    PI5 -- "ping every 60s" --> PICO
-
-    USER -- "/status /uptime /simulate_power_loss" --> P2
+    PI4 -- "GET /status every 10s" --> PICO
+    PI5 -- "GET /status every 10s" --> PICO
 ```
 
 ## Power Failure Timeline
@@ -40,66 +39,66 @@ sequenceDiagram
     participant Pico as Pi Pico W
     participant Pi4 as Pi 4 (LCD)
     participant Pi5 as Pi 5 (Headless)
-    participant TG as Telegram
 
     Note over Grid: Power goes out
-    Grid->>Pico: ❌ Power lost (or /simulate_power_loss)
-    
-    Note over Pi4,Pi5: Ping attempts every 60s
-    Pi4->>Pico: ping (fail — strike 1)
-    Pi5->>Pico: ping (fail — strike 1)
-    Pi4->>Pico: ping (fail — strike 2)
-    Pi5->>Pico: ping (fail — strike 2)
-    Pi4->>Pico: ping (fail — strike 3)
-    Pi5->>Pico: ping (fail — strike 3)
-    
-    Note over Pi4,Pi5: 3 strikes — power loss declared
-    Note over Pi4: LCD shows 7 min countdown
-    Note over Pi5: Syslog starts countdown
+    Grid->>Pico: ❌ Power lost
 
-    Note over Pi4,Pi5: 7 minutes later...
+    Note over Pi4,Pi5: GET /status every 10s
+    Pi4->>Pico: request (fail — strike 1)
+    Pi5->>Pico: request (fail — strike 1)
+    Pi4->>Pico: request (fail — strike 2)
+    Pi5->>Pico: request (fail — strike 2)
+    Pi4->>Pico: request (fail — strike 3)
+    Pi5->>Pico: request (fail — strike 3)
+    Pi4->>Pico: request (fail — strike 4)
+    Pi5->>Pico: request (fail — strike 4)
+
+    Note over Pi4,Pi5: 4 strikes (~40s) — power loss declared, 60s countdown
+
+    Note over Pi4,Pi5: ~100 seconds later...
     Pi4->>Pi4: sync → poweroff
     Pi5->>Pi5: sync → poweroff
 
     Note over Grid: Power restored
-    Grid->>Pico: ✅ Power on
-    Note over Pico: WiFi connect
-    Pico->>TG: ⚡ POWER RESTORED
-    Note over Pi4,Pi5: Manually power back on
+    Grid->>Pico: ✅ Power on, WiFi reconnects
+    Note over Pi4,Pi5: Manually power back on (no WoL)
 ```
 
-## Telegram Commands
+## Pico `/status` Endpoint
 
-```mermaid
-graph LR
-    subgraph "Handled by Pico"
-        A["/status"] --> A1["WiFi, uptime, RAM"]
-        B["/uptime"] --> B1["Pico uptime"]
-        C["/simulate_power_loss"] --> C1["Disable WiFi for 11m to test Pi shutdown"]
-        D["/help"] --> D1["Command list"]
-    end
+Any device on the LAN can query it directly:
+
+```bash
+curl http://<pico-ip>/status
 ```
+
+```json
+{"uptime_s": 1234, "wifi_connected": true, "rssi": -52, "last_outage_s": 8}
+```
+
+- `uptime_s` — seconds since the Pico last booted
+- `wifi_connected` / `rssi` — current WiFi link status
+- `last_outage_s` — how long the *previous* WiFi drop lasted (`null` if it hasn't dropped since boot)
+
+This is what the Pi 4/5 monitors poll to decide whether the Pico (and by
+extension, the grid) is up.
 
 ## Setup
 
 ### 1. Pi Pico W
 
 ```bash
-# 1. Copy config template and fill in your values
+# 1. Copy config template and fill in your WiFi details
 cp PiPico/config.example.json PiPico/config.json
-# Edit config.json with your WiFi and Telegram details
 
-# 2. Build a standalone main.py with secrets baked in
-python3 PiPico/build.py
-# This produces PiPico/main_built.py (gitignored)
-
-# 3. Flash to Pico W using Thonny
-# In Thonny:
-#   - Set interpreter to MicroPython (Raspberry Pi Pico)
-#   - Upload PiPico/main_built.py to the Pico as "main.py"
-#   - Upload PiPico/boot.py to the Pico as "boot.py"
-#   - No need to upload config.json — values are baked into main_built.py
+# 2. Upload both files to the Pico (e.g. with mpremote from a venv)
+mpremote cp PiPico/config.json :config.json
+mpremote cp PiPico/main.py :main.py
+mpremote reset
 ```
+
+No `boot.py` and no build step — `main.py` runs automatically on boot, and
+`config.json` holds only WiFi credentials (already gitignored).
 
 ### 2. Pi 4 (Dual Service: Power Monitor + LCD)
 
@@ -107,42 +106,46 @@ Because safely shutting down the host system from within a Docker container is i
 
 #### Part A: Power Monitor (Native Systemd)
 ```bash
-cd ~/Projects/home-mesh/Pi4LCD
+cd ~/Projects/home-mesh
 
 # Create config
-cp ../config.example.ini config.ini
-# Edit config.ini — set identity.name = pi4
+cp config.example.ini Pi4LCD/config.ini
+# Edit Pi4LCD/config.ini — set identity.name = pi4, network.pico_ip = <pico's IP>
 
-# Install systemd service
-sudo cp power-monitor.service /etc/systemd/system/
+# Install systemd service (edit the ExecStart paths in the .service file
+# first if your checkout isn't at the path it already points to)
+sudo cp Pi4LCD/power-monitor.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable power-monitor.service
-sudo systemctl start power-monitor.service
+sudo systemctl enable --now power-monitor.service
 ```
 
 #### Part B: LCD Display (Dockerized)
 The LCD requires the `RPLCD` library, which we run in Docker to avoid system Python environment conflicts (`PEP 668`).
 
 ```bash
-# Build and run the container in the background
+cd Pi4LCD
 docker compose up -d --build
 ```
 
 ### 3. Pi 5 (Headless Monitor)
 
 ```bash
-cd ~/Projects/home-mesh/Pi5
+cd ~/Projects/home-mesh
 
 # Create config
-cp ../config.example.ini config.ini
-# Edit config.ini — set identity.name = pi5
+cp config.example.ini Pi5/config.ini
+# Edit Pi5/config.ini — set identity.name = pi5, network.pico_ip = <pico's IP>
 
-# Install systemd service
-sudo cp power-monitor.service /etc/systemd/system/
+sudo cp Pi5/power-monitor.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable power-monitor.service
-sudo systemctl start power-monitor.service
+sudo systemctl enable --now power-monitor.service
 ```
+
+`power_monitor.py` lives once at the repo root and is shared by both
+devices; each systemd unit passes it that device's own `config.ini` as an
+argument. To test without risking an actual shutdown, run it manually with
+`POWER_MONITOR_DRY_RUN=1 python3 power_monitor.py Pi5/config.ini` — it logs
+what it would do instead of calling `systemctl poweroff`.
 
 ## Configuration
 
@@ -153,25 +156,33 @@ sudo systemctl start power-monitor.service
 pico_ip = 192.168.0.107
 
 [power]
-ping_interval_sec = 60
-max_failed_pings = 3
-shutdown_countdown_min = 7
-ping_timeout_sec = 5
+ping_interval_sec = 10
+ping_timeout_sec = 3
+max_failed_pings = 4
+shutdown_countdown_sec = 60
 
 [identity]
 name = pi4   # or pi5
 ```
+
+Timing is built around a UPS that only lasts **3-5 minutes**:
+`detection_time ≈ ping_interval_sec × max_failed_pings` (40s with the
+defaults above), then `shutdown_countdown_sec` (60s) before `poweroff` runs
+— about 1m40s total, leaving margin for the Pi's own shutdown time. Tune
+both numbers to your actual measured UPS runtime; keep the total well under
+it.
 
 ### Pico W — `config.json`
 
 ```json
 {
     "wifi_ssid": "YOUR_SSID",
-    "wifi_password": "YOUR_PASSWORD",
-    "bot_token": "YOUR_BOT_TOKEN",
-    "chat_id": "YOUR_CHAT_ID"
+    "wifi_password": "YOUR_PASSWORD"
 }
 ```
+
+Give the Pico a static IP or DHCP reservation — if its address drifts, both
+Pis will wrongly declare power loss and shut down.
 
 ## File Structure
 
@@ -180,23 +191,20 @@ home-mesh/
 ├── .gitignore
 ├── README.md
 ├── config.example.ini          # Template for Pi 4/Pi 5
+├── power_monitor.py            # Shared power monitor (takes a config.ini path as argv[1])
 ├── PiPico/
-│   ├── main.py                 # Telegram bot + ping target
-│   ├── boot.py                 # MicroPython auto-start
-│   ├── config.example.json     # Template
-│   ├── build.py                # script to compile secrets into main.py
-│   └── config.json             # Secrets (gitignored)
+│   ├── main.py                 # WiFi + /status HTTP responder
+│   └── config.example.json     # Template
 ├── Pi4LCD/
-│   ├── power_monitor.py        # Native power monitor (same as Pi5)
 │   ├── lcd_display.py          # Dockerized LCD stats display
-│   ├── Dockerfile              # Docker environment for LCD
-│   ├── docker-compose.yml      # Compose file for easy deployment
+│   ├── Dockerfile
+│   ├── docker-compose.yml
 │   ├── lcd_message.py          # One-shot LCD message utility
 │   ├── power-monitor.service   # Native systemd unit
 │   ├── requirements.txt
+│   ├── GiveUp.md                # Why Wake-on-LAN doesn't work on the Pi 4
 │   └── config.ini              # Secrets (gitignored)
 ├── Pi5/
-│   ├── power_monitor.py        # Headless power monitor
 │   ├── power-monitor.service   # systemd unit
 │   └── config.ini              # Secrets (gitignored)
 └── legacy/                     # Archived C code and old scripts (gitignored)
@@ -204,6 +212,5 @@ home-mesh/
 
 ## Security Notes
 
-- **All secrets** (Telegram tokens, WiFi passwords) are in gitignored config files
-- **Telegram commands** are validated against `chat_id` — unauthorized users are ignored
+- **All secrets** (WiFi password) are in gitignored config files
 - The `legacy/` directory is gitignored and won't be pushed

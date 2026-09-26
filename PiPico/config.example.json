@@ -1,6 +1,4 @@
 {
     "wifi_ssid": "YOUR_SSID",
-    "wifi_password": "YOUR_PASSWORD",
-    "bot_token": "YOUR_BOT_TOKEN",
-    "chat_id": "YOUR_CHAT_ID"
+    "wifi_password": "YOUR_PASSWORD"
 }

@@ -1,3 +1,2 @@
 RPLCD
 RPi.GPIO
-requests
